@@ -24,13 +24,12 @@
 option(PXR_STRICT_BUILD_MODE "Turn on additional warnings. Enforce all warnings as errors." OFF)
 option(PXR_BUILD_TESTS "Build tests" ON)
 option(PXR_ENABLE_PYTHON_SUPPORT "Enable Python based components for USD" ON)
+option(PXR_USE_PYTHON_3 "Build Python bindings for Python 3" OFF)
 option(PXR_ENABLE_NAMESPACES "Enable C++ namespaces." ON)
 
+option(RPR_ENABLE_VULKAN_INTEROP_SUPPORT OFF "Build hdRpr with Vulkan interop support. Requires Vulkan cmake package")
+
 option(PXR_SYMLINK_HEADER_FILES "Symlink the header files from, ie, pxr/base/lib/tf to CMAKE_DIR/pxr/base/tf, instead of copying; ensures that you may edit the header file in either location, and improves experience in IDEs which find normally the \"copied\" header, ie, CLion; has no effect on windows" OFF)
-
-option(RPR_ENABLE_OPENVDB_SUPPORT "Enable OpenVDB" OFF)
-
-option(RPR_BUILD_AS_HOUDINI_PLUGIN "Build RadeonProRender Houdini plugin" OFF)
 
 # Precompiled headers are a win on Windows, not on gcc.
 set(pxr_enable_pch "OFF")
@@ -71,7 +70,7 @@ set(PXR_OBJECT_LIBS ""
     "Aggregation of all core libraries built as OBJECT libraries."
 )
 
-set(PXR_LIB_PREFIX "lib"
+set(PXR_LIB_PREFIX ${CMAKE_SHARED_LIBRARY_PREFIX}
     CACHE
     STRING
     "Prefix for build library name"
@@ -79,3 +78,6 @@ set(PXR_LIB_PREFIX "lib"
 
 option(BUILD_SHARED_LIBS "Build shared libraries." ON)
 option(PXR_BUILD_MONOLITHIC "Build a monolithic library." OFF)
+
+option(MATERIALX_BUILD_PYTHON "Build the MaterialX Python package from C++ bindings. Requires Python 2.7 or greater." OFF)
+option(MATERIALX_INSTALL_PYTHON "Install the MaterialX Python package as a third-party library when the install target is built." OFF)

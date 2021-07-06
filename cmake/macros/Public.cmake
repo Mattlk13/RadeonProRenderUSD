@@ -23,6 +23,45 @@
 #
 include(Private)
 
+function(GroupSources target)
+    get_target_property(${target}_SOURCES ${target} SOURCES)
+    foreach(FILE ${${target}_SOURCES}) 
+        get_filename_component(ABS_FILE ${FILE} ABSOLUTE)
+        file(RELATIVE_PATH relPath ${CMAKE_CURRENT_SOURCE_DIR} ${ABS_FILE})
+
+        string(FIND "${relPath}" ".." out)
+        if("${out}" EQUAL 0)
+            source_group("external" FILES "${FILE}")
+        else()
+            get_filename_component(PARENT_DIR "${FILE}" DIRECTORY)
+            string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}" "" GROUP "${PARENT_DIR}")
+            string(REPLACE "/" "\\" GROUP "${GROUP}")
+            source_group("${GROUP}" FILES "${FILE}")
+        endif()
+    endforeach()
+endfunction()
+
+macro(GetAppDataPath retVal)
+    if(WIN32)
+        if(DEFINED ENV{PROGRAMDATA})
+            file(TO_CMAKE_PATH $ENV{PROGRAMDATA} _APP_DATA_PATH)
+        endif()
+    elseif(APPLE)
+        set(_APP_DATA_PATH "$ENV{HOME}/Library/Application Support")
+    else()
+        if(DEFINED ENV{XDG_DATA_HOME} AND IS_ABSOLUTE $ENV{XDG_DATA_HOME})
+            set(_APP_DATA_PATH "$ENV{XDG_DATA_HOME}")
+        elseif(DEFINED ENV{HOME})
+            set(_APP_DATA_PATH "$ENV{HOME}/.config")
+        endif()
+    endif()
+
+    if(NOT DEFINED _APP_DATA_PATH)
+        message(FATAL_ERROR "Unable to determine app data folder")
+    endif()
+    set(${retVal} "${_APP_DATA_PATH}")
+endmacro()
+
 function(pxr_python_bin BIN_NAME)
     set(oneValueArgs
         PYTHON_FILE
@@ -253,10 +292,6 @@ function(pxr_library NAME)
         set(prefix "")
         set(suffix ${CMAKE_SHARED_LIBRARY_SUFFIX})
 
-        if(RPR_BUILD_AS_HOUDINI_PLUGIN)
-            set(subdir "usd_plugins")
-        endif()
-
         # Katana plugins install into a specific sub directory structure.
         # In particular, shared objects install into plugin/Libs
         if(args_KATANA_PLUGIN)
@@ -351,8 +386,8 @@ function(pxr_setup_python)
     # Join these with a ', '
     string(REPLACE ";" ", " pyModulesStr "${converted}")
 
-    # Install a pxr __init__.py with an appropriate __all__
-    _get_install_dir(lib/python/pxr installPrefix)
+    # Install a rpr __init__.py with an appropriate __all__
+    _get_install_dir(lib/python/rpr installPrefix)
 
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated_modules_init.py"
          "__all__ = [${pyModulesStr}]\n")
@@ -842,6 +877,7 @@ function(pxr_toplevel_prologue)
                 PROPERTIES
                     FOLDER "${folder}"
                     PREFIX "${PXR_LIB_PREFIX}"
+                    IMPORT_PREFIX "${PXR_LIB_PREFIX}"
             )
             _get_install_dir("lib" libInstallPrefix)
             install(
@@ -965,6 +1001,7 @@ function(pxr_monolithic_epilogue)
             FOLDER "${folder}"
             POSITION_INDEPENDENT_CODE ON
             PREFIX "${PXR_LIB_PREFIX}"
+            IMPORT_PREFIX "${PXR_LIB_PREFIX}"
     )
 
     # Adding $<TARGET_OBJECTS:foo> will not bring along compile

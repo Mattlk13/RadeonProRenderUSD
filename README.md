@@ -7,64 +7,60 @@ You can build this plugin as usdview plugin or as houdini plugin.
 
 For more details on USD, please visit the web site [here](http://openusd.org).
 
-Prerequisites
+Getting and Building the Code
 -----------------------------
 
-#### Common
-* **AMD Radeon™ ProRender SDK** [link](https://www.amd.com/en/technologies/sdk-agreement)
-* **AMD Radeon™ Image Filter Library** [link](https://www.amd.com/en/technologies/sdk-agreement)
-License allows non-commercial use for developers.  Contact through the website for commercial distribution.
+#### 1. Install prerequisites
 
-#### For UsdView plugin
-* **USD build / tree**
-As many USD users get the USD libraries from different places, or compile their own, we tried to keep this as flexible as possible.
-You can download USD to build yourself from [GitHub](https://www.github.com/PixarAnimationStudios/USD)
+- Required:
+    - C++ compiler:
+        - gcc
+        - Xcode
+        - Microsoft Visual Studio
+    - CMake
+    - Python
+    
+- Optional:
+    - git
 
-#### For Houdini plugin
-* **Houdini 18**
-You can download Houdini installer from [Daily Builds | SideFX](https://www.sidefx.com/download/daily-builds/#category-gold)
+#### 2. Download the hdRpr source code
 
-Building
------------------------------
+You can use ```git``` to clone the repository.
+For modern, SMT or multi-threaded systems use:
 
-Build using cmake.
+```
+> git clone --recurse-submodules -j4 https://github.com/GPUOpen-LibrariesAndSDKs/RadeonProRenderUSD
+Cloning into 'RadeonProRenderUSD'...
+```
 
-#### Required Components
+For legacy or low-power devices use:
 
-##### Radeon Pro Render
+```
+> git clone https://github.com/GPUOpen-LibrariesAndSDKs/RadeonProRenderUSD
+Cloning into 'RadeonProRenderUSD'...
+> cd RadeonProRenderUSD
+> git submodule update --init
+```
 
-| Dependency Name            | Description                                                             | Version          |
-| ------------------         |-----------------------------------------------------------------------  | -------          |
-| RPR_LOCATION               | Radeon Pro Render directory with include and lib dirs                   | 1.3.20 or higher |
+#### 3. Configure project using cmake
 
-##### Radeon Image Filters
+##### Required Components
 
-| Dependency Name            | Description                                                             | Version          |
-| ------------------         |-----------------------------------------------------------------------  | -------          |
-| RIF_LOCATION               | Radeon Image Filter Library directory with include and lib dirs         | 1.2.0 or higher  |
+##### USD Component
 
-##### UsdView plugin Components
+Provide USD in one of two ways:
 
-UsdView plugin is build by default (```RPR_BUILD_AS_HOUDINI_PLUGIN=FALSE```).
+* An installation of USD. Define pxr_DIR to point to it when running cmake, if required. You can download USD to build yourself from [GitHub](https://www.github.com/PixarAnimationStudios/USD).
+* The USD which is provided with Houdini. The HFS environment variable should point to the Houdini installation (the correct way is to run cmake from Houdini's `Command Line Tools` or by sourcing `houdini_setup`). You can download Houdini installer from [Downloads | SideFX](https://www.sidefx.com/download).
 
-| Dependency Name            | Description                                                             | Version          |
-| ------------------         |-----------------------------------------------------------------------  | -------          |
-| USD_ROOT                   | USD directory with include and lib dirs                                 | 19.07            |
+##### MaterialX Component
 
-##### Houdini plugin Components
+By default, MaterialX library will be compiled from the sources located under a MaterialX submodule `deps/MaterialX`.
+You can override this behavior by providing a complete build of MaterialX to cmake. Please note, on Linux for Houdini plugin, MaterialX should be compiled with `-D_GLIBCXX_USE_CXX11_ABI=0` definition as it is required by Houdini.
 
-To build houdini plugin set cmake flag ```RPR_BUILD_AS_HOUDINI_PLUGIN=TRUE```.
-
-| Dependency Name            | Description                                                             | Version          |
-| ------------------         |-----------------------------------------------------------------------  | -------          |
-| HOUDINI_ROOT               | Houdini installation directory                                          | 18               |
-
-#### Optional Components
+##### Optional Components
 
 ##### OpenVDB
-
-Support for OpenVDB is disabled by default, and can optionally be enabled by
-specifying the cmake flag ```RPR_ENABLE_OPENVDB_SUPPORT=TRUE```.
 
 **Following dependency required only for usdview plugin, houdini is shipped with own build of openvdb**
 
@@ -72,21 +68,20 @@ specifying the cmake flag ```RPR_ENABLE_OPENVDB_SUPPORT=TRUE```.
 | ------------------         |-----------------------------------------------------------------------  | -------          |
 | OPENVDB_LOCATION           | OpenVDB directory with include and lib dirs                             |                  |
 
-#### Utility cmake options
+##### Utility cmake options
 
 ##### `RPR_SDK_PLATFORM` - Forcing build against specific platform libraries
 
 Let's say you are on centos 7 and want to force it to use the centos6 build,
 then you need to specify ```RPR_SDK_PLATFORM=centos6``` cmake flag
 
-#### Example
+##### Example
 
 ```
 mkdir build
 cd build
-cmake -DUSD_ROOT=/data/usd_build -DRPR_LOCATION=/data/RPR_SDK/RadeonProRender -DCMAKE_INSTALL_PREFIX=/data/usd_build ..
-make
-make install
+cmake -Dpxr_DIR=/data/usd_build -DCMAKE_INSTALL_PREFIX=/data/usd_build ..
+cmake --build . --config Release --target install
 ```
 
 Supported Platforms
@@ -98,30 +93,29 @@ Supported Platforms
 Try it out
 -----------------------------
 
-Set the environment variables specified by the script when it finishes and
-launch ```usdview``` with a sample asset.
-
-```
-> usdview extras/usd/tutorials/convertingLayerFormats/Sphere.usda
-```
-
-And select RPR as the render delegate.
+Follow instruction from INSTALL.md to activate the plugin.
+Launch either usdview or Houdini's Solaris viewport and select RPR as the render delegate.
 
 #### Environment Variables
 
-*   `PXR_PLUGINPATH_NAME`
+*   `HDRPR_ENABLE_TRACING`
 
-    If you want the RPR menu added to USDView (allows selecting device, and render quality). Set it to ``` PXR_PLUGINPATH_NAME=${USD_ROOT}/lib/python/rpr ```, where USD_ROOT is your USD install directory.
-
-*   `RPR_ENABLE_TRACING`
-
-    Instruct Radeon ProRender to generate trace files for debugging purposes. The tracing will record all RPR commands with a memory dump of the data used. By default, RPR tracing is disabled. To enable it set `RPR_ENABLE_TRACING` to 1.
+    Instruct Radeon ProRender to generate trace files for debugging purposes. The tracing will record all RPR commands with a memory dump of the data used. By default, RPR tracing is disabled. To enable it set `HDRPR_ENABLE_TRACING` to 1.
 
     When tracing is enabled, the trace files are recorded by default in the following directory depending on the OS (In the case of multiple directories first existing will be used):
 
     - `C:\ProgramData\hdRPR` for Windows
     - `$TMPDIR/hdRPR`, `$P_tmpdir/hdRPR`, `/tmp/hdRPR` for Linux and macOS
 
-*   `RPR_TRACING_PATH`
+*   `HDRPR_TRACING_DIR`
 
-    To change the default directory, add the environment variable `RPR_TRACING_PATH` pointing to the location in which you wish the trace files to be recorded. For example, set `RPR_TRACING_PATH=C:\folder\` to activate the tracing in `C:\folder\`.
+    To change the default directory, add the environment variable `HDRPR_TRACING_DIR` pointing to the location in which you wish the trace files to be recorded. For example, set `HDRPR_TRACING_DIR=C:\folder\` to activate the tracing in `C:\folder\`.
+
+Houdini
+-----------------------------
+
+##### RPR Material Library
+
+1. Download [.mtlx version of RPR Material Library](https://drive.google.com/file/d/1i5jdYGS7gmrxw_Y0y7uotx4gxXVr8cMB/view?usp=sharing).
+
+2. Follow instructions from INSTALL.md shipped with the material library.

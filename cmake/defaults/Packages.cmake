@@ -30,7 +30,30 @@ set(build_shared_libs "${BUILD_SHARED_LIBS}")
 # USD Arnold Requirements
 # ----------------------------------------------
 
-find_package(USD REQUIRED)
+# Try to find monolithic USD
+find_package(USDMonolithic QUIET)
+
+if(NOT USDMonolithic_FOUND)
+    find_package(pxr CONFIG)
+
+    if(NOT pxr_FOUND)
+        # Try to find USD as part of Houdini.
+        find_package(HoudiniUSD)
+
+        if(HoudiniUSD_FOUND)
+            message(STATUS "Configuring Houdini plugin")
+        endif()
+    else()
+        message(STATUS "Configuring usdview plugin")
+    endif()
+else()
+    message(STATUS "Configuring usdview plugin: monolithic USD")
+endif()
+
+if(NOT pxr_FOUND AND NOT HoudiniUSD_FOUND AND NOT USDMonolithic_FOUND)
+    message(FATAL_ERROR "Required: USD install or Houdini with included USD.")
+endif()
+
 find_package(Rpr REQUIRED)
 find_package(Rif REQUIRED)
 
@@ -44,43 +67,16 @@ set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 find_package(Threads REQUIRED)
 set(PXR_THREAD_LIBS "${CMAKE_THREAD_LIBS_INIT}")
 
-if(RPR_BUILD_AS_HOUDINI_PLUGIN)
-    if(WIN32)
-        set(PYTHON_INCLUDE_DIRS ${HOUDINI_ROOT}/python27/include)
-        set(PYTHON_LIBRARY ${HOUDINI_ROOT}/python27/libs/python27.lib)
-    endif()
+if(HoudiniUSD_FOUND)
+    set(HOUDINI_ROOT "$ENV{HFS}" CACHE PATH "Houdini installation dir")
+    find_package(Houdini REQUIRED CONFIG PATHS ${HOUDINI_ROOT}/toolkit/cmake)
 
-    find_package(PythonLibs 2.7 REQUIRED)
+    set(OPENEXR_LOCATION ${Houdini_USD_INCLUDE_DIR})
+    set(OPENEXR_LIB_LOCATION ${Houdini_LIB_DIR})
+else()
+    # We are using python to generate source files
     find_package(PythonInterp 2.7 REQUIRED)
-
-    set(TBB_INCLUDE_DIR ${HOUDINI_INCLUDE_DIR})
-    set(TBB_LIBRARY ${HOUDINI_LIB})
-
-    set(GLEW_LOCATION ${HOUDINI_LIB})
-    set(GLEW_INCLUDE_DIR ${HOUDINI_INCLUDE_DIR})
-
-    set(Boost_INCLUDE_DIRS ${HOUDINI_INCLUDE_DIR})
-    find_library(Boost_LIBRARIES
-        NAMES libhboost_python libhboost_python-mt hboost_python hboost_python-mt
-        PATHS "${HOUDINI_LIB}"
-        NO_DEFAULT_PATH
-        NO_SYSTEM_ENVIRONMENT_PATH)
-else(RPR_BUILD_AS_HOUDINI_PLUGIN)
-    find_package(PythonInterp 2.7 REQUIRED)
-    find_package(PythonLibs 2.7 REQUIRED)
-
-    find_package(Boost
-        COMPONENTS
-            python
-        REQUIRED
-    )
 endif()
-
-find_package(TBB REQUIRED COMPONENTS tbb)
-add_definitions(${TBB_DEFINITIONS})
-
-find_package(OpenGL REQUIRED)
-find_package(GLEW REQUIRED)
 
 if (NOT PXR_MALLOC_LIBRARY)
     if (NOT WIN32)
@@ -88,12 +84,47 @@ if (NOT PXR_MALLOC_LIBRARY)
     endif()
 endif()
 
+find_package(MaterialX QUIET)
+
+if(RPR_ENABLE_VULKAN_INTEROP_SUPPORT)
+    find_package(Vulkan REQUIRED)
+endif()
 
 # Third Party Plugin Package Requirements
 # ----------------------------------------------
 
-if(RPR_ENABLE_OPENVDB_SUPPORT)
-	find_package(OpenVDB REQUIRED)
+if(HoudiniUSD_FOUND)
+    find_package(OpenVDB REQUIRED)
+else()
+    find_package(OpenVDB QUIET)
+endif()
+
+macro(find_exr)
+    if(NOT OpenEXR_FOUND)
+        set(SIDEFX_COMPONENTS ${ARGV})
+        list(TRANSFORM SIDEFX_COMPONENTS APPEND "_sidefx")
+
+        if(HoudiniUSD_FOUND)
+            find_package(OpenEXR QUIET COMPONENTS ${SIDEFX_COMPONENTS})
+        endif()
+
+        if(NOT OpenEXR_FOUND)
+            find_package(OpenEXR QUIET COMPONENTS ${ARGV})
+        endif()
+    endif()
+endmacro()
+
+find_exr(Half IlmImf Iex)
+
+set(RPR_EXR_EXPORT_ENABLED TRUE)
+if(NOT OpenEXR_FOUND)
+    set(RPR_EXR_EXPORT_ENABLED FALSE)
+endif()
+
+find_exr(Half)
+
+if(NOT OpenEXR_FOUND)
+    message(FATAL_ERROR "Failed to find Half library")
 endif()
 
 # ----------------------------------------------

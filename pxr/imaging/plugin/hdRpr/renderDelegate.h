@@ -1,248 +1,127 @@
+/************************************************************************
+Copyright 2020 Advanced Micro Devices, Inc
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+    http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+************************************************************************/
+
 #ifndef HDRPR_RENDER_DELEGATE_H
 #define HDRPR_RENDER_DELEGATE_H
 
-#include "pxr/pxr.h"
-#include "pxr/imaging/hd/renderDelegate.h"
-#include "pxr/imaging/hd/tokens.h"
-
 #include "api.h"
-#include "rprApi.h"
+#include "renderThread.h"
+
+#include "pxr/imaging/hd/renderDelegate.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-#define HDRPR_RENDER_SETTINGS_TOKENS \
-    (enableDenoising)                \
-    (renderQuality)
+#if PXR_VERSION >= 2102
+#define HDRPR_INSTANCER_ID_ARG_DECL
+#define HDRPR_INSTANCER_ID_ARG
+#else
+#define HDRPR_INSTANCER_ID_ARG_DECL , SdfPath const& instancerId
+#define HDRPR_INSTANCER_ID_ARG , instancerId
+#endif
 
-TF_DECLARE_PUBLIC_TOKENS(HdRprRenderSettingsTokens, HDRPR_RENDER_SETTINGS_TOKENS);
+class HdRprDiagnosticMgrDelegate;
+class HdRprRenderParam;
+class HdRprApi;
 
-#define HDRPR_RENDER_QUALITY_TOKENS \
-    (low)                           \
-    (medium)                        \
-    (high)                          \
-    (full)                          \
-
-TF_DECLARE_PUBLIC_TOKENS(HdRprRenderQualityTokens, HDRPR_RENDER_QUALITY_TOKENS);
-
-///
-/// \class HdRprDelegate
-///
 class HdRprDelegate final : public HdRenderDelegate {
 public:
 
-    HdRprDelegate();
+    HdRprDelegate(HdRenderSettingsMap const& renderSettings);
     ~HdRprDelegate() override;
 
-    HdRprDelegate(const HdRprDelegate &)= delete;
-    HdRprDelegate &operator =(const HdRprDelegate &)= delete;
+    HdRprDelegate(const HdRprDelegate&) = delete;
+    HdRprDelegate& operator =(const HdRprDelegate&) = delete;
 
-    ///
-    /// Returns a list of typeId's of all supported Rprims by this render
-    /// delegate.
-    ///
-    const TfTokenVector &GetSupportedRprimTypes() const override;
+    const TfTokenVector& GetSupportedRprimTypes() const override;
+    const TfTokenVector& GetSupportedSprimTypes() const override;
+    const TfTokenVector& GetSupportedBprimTypes() const override;
 
-    ///
-    /// Returns a list of typeId's of all supported Sprims by this render
-    /// delegate.
-    ///
-    const TfTokenVector &GetSupportedSprimTypes() const override;
-
-
-    ///
-    /// Returns a list of typeId's of all supported Bprims by this render
-    /// delegate.
-    ///
-    const TfTokenVector &GetSupportedBprimTypes() const override;
-
-    ///
-    /// Returns an opaque handle to a render param, that in turn is
-    /// passed to each prim created by the render delegate during sync
-    /// processing.  This avoids the need to store a global state pointer
-    /// in each prim.
-    ///
-    /// The typical lifetime of the renderParam would match that of the
-    /// RenderDelegate, however the minimal lifetime is that of the Sync
-    /// processing.  The param maybe queried multiple times during sync.
-    ///
-    /// A render delegate may return null for the param.
-    ///
-    HdRenderParam *GetRenderParam() const override;
-
-    ///
-    /// Returns a shared ptr to the resource registry of the current render
-    /// delegate.
-    ///
+    HdRenderParam* GetRenderParam() const override;
     HdResourceRegistrySharedPtr GetResourceRegistry() const override;
 
-    ////////////////////////////////////////////////////////////////////////////
-    ///
-    /// Renderpass Factory
-    ///
-    ////////////////////////////////////////////////////////////////////////////
+    HdRenderPassSharedPtr CreateRenderPass(HdRenderIndex* index,
+                                           HdRprimCollection const& collection) override;
 
-    ///
-    /// Request to create a new renderpass.
-    /// \param index the render index to bind to the new renderpass.
-    /// \param collection the rprim collection to bind to the new renderpass.
-    /// \return A shared pointer to the new renderpass or empty on error.
-    ///
-    HdRenderPassSharedPtr CreateRenderPass(HdRenderIndex *index,
-                                      HdRprimCollection const& collection) override;
+    HdInstancer* CreateInstancer(HdSceneDelegate* delegate,
+                                 SdfPath const& id
+                                 HDRPR_INSTANCER_ID_ARG_DECL) override;
+    void DestroyInstancer(HdInstancer* instancer) override;
 
-    ////////////////////////////////////////////////////////////////////////////
-    ///
-    /// Instancer Factory
-    ///
-    ////////////////////////////////////////////////////////////////////////////
+    HdRprim* CreateRprim(TfToken const& typeId,
+                         SdfPath const& rprimId
+                         HDRPR_INSTANCER_ID_ARG_DECL) override;
+    void DestroyRprim(HdRprim* rPrim) override;
 
-    ///
-    /// Request to create a new instancer.
-    /// \param id The unique identifier of this instancer.
-    /// \param instancerId The unique identifier for the parent instancer that
-    ///                    uses this instancer as a prototype (may be empty).
-    /// \return A pointer to the new instancer or nullptr on error.
-    ///
-    HdInstancer *CreateInstancer(HdSceneDelegate *delegate,
-                                         SdfPath const& id,
-                                         SdfPath const& instancerId) override;
+    HdSprim* CreateSprim(TfToken const& typeId,
+                         SdfPath const& sprimId) override;
+    HdSprim* CreateFallbackSprim(TfToken const& typeId) override;
+    void DestroySprim(HdSprim* sprim) override;
 
-    void DestroyInstancer(HdInstancer *instancer) override;
+    HdBprim* CreateBprim(TfToken const& typeId,
+                         SdfPath const& bprimId) override;
+    HdBprim* CreateFallbackBprim(TfToken const& typeId) override;
+    void DestroyBprim(HdBprim* bprim) override;
 
-    ////////////////////////////////////////////////////////////////////////////
-    ///
-    /// Prim Factories
-    ///
-    ////////////////////////////////////////////////////////////////////////////
+    void CommitResources(HdChangeTracker* tracker) override;
 
+    TfToken GetMaterialBindingPurpose() const override { return HdTokens->full; }
+    TfToken GetMaterialNetworkSelector() const override;
 
-    ///
-    /// Request to Allocate and Construct a new Rprim.
-    /// \param typeId the type identifier of the prim to allocate
-    /// \param rprimId a unique identifier for the prim
-    /// \param instancerId the unique identifier for the instancer that uses
-    ///                    the prim (optional: May be empty).
-    /// \return A pointer to the new prim or nullptr on error.
-    ///                     
-    HdRprim *CreateRprim(TfToken const& typeId,
-                                 SdfPath const& rprimId,
-                                 SdfPath const& instancerId) override;
-
-    ///
-    /// Request to Destruct and deallocate the prim.
-    /// 
-    void DestroyRprim(HdRprim *rPrim) override;
-
-    ///
-    /// Request to Allocate and Construct a new Sprim.
-    /// \param typeId the type identifier of the prim to allocate
-    /// \param sprimId a unique identifier for the prim
-    /// \return A pointer to the new prim or nullptr on error.
-    ///
-    HdSprim *CreateSprim(TfToken const& typeId,
-                                 SdfPath const& sprimId) override;
-
-    ///
-    /// Request to Allocate and Construct an Sprim to use as a standin, if there
-    /// if an error with another another Sprim of the same type.  For example,
-    /// if another prim references a non-exisiting Sprim, the fallback could
-    /// be used.
-    ///
-    /// \param typeId the type identifier of the prim to allocate
-    /// \return A pointer to the new prim or nullptr on error.
-    ///
-    HdSprim *CreateFallbackSprim(TfToken const& typeId) override;
-
-    ///
-    /// Request to Destruct and deallocate the prim.
-    ///
-    void DestroySprim(HdSprim *sprim) override;
-
-    ///
-    /// Request to Allocate and Construct a new Bprim.
-    /// \param typeId the type identifier of the prim to allocate
-    /// \param sprimId a unique identifier for the prim
-    /// \return A pointer to the new prim or nullptr on error.
-    ///
-    HdBprim *CreateBprim(TfToken const& typeId,
-                                 SdfPath const& bprimId) override;
-
-
-    ///
-    /// Request to Allocate and Construct a Bprim to use as a standin, if there
-    /// if an error with another another Bprim of the same type.  For example,
-    /// if another prim references a non-exisiting Bprim, the fallback could
-    /// be used.
-    ///
-    /// \param typeId the type identifier of the prim to allocate
-    /// \return A pointer to the new prim or nullptr on error.
-    ///
-    HdBprim *CreateFallbackBprim(TfToken const& typeId) override;
-
-    ///
-    /// Request to Destruct and deallocate the prim.
-    ///
-    void DestroyBprim(HdBprim *bprim) override;
-
-    ////////////////////////////////////////////////////////////////////////////
-    ///
-    /// Sync, Execute & Dispatch Hooks
-    ///
-    ////////////////////////////////////////////////////////////////////////////
-
-    ///
-    /// Notification point from the Engine to the delegate.
-    /// This notification occurs after all Sync's have completed and
-    /// before task execution.
-    ///
-    /// This notification gives the Render Delegate a chance to
-    /// update and move memory that the render may need.
-    ///
-    /// For example, the render delegate might fill primvar buffers or texture
-    /// memory.
-    ///
-    void CommitResources(HdChangeTracker *tracker) override;
-
-	TfToken GetMaterialBindingPurpose() const override { return HdTokens->full; }
- 
-	///
-	/// Returns a token that can be used to select among multiple
-	/// material network implementations.  The default is empty.
-	///
-	TfToken GetMaterialNetworkSelector() const override;
-
-    ///
-    /// Returns a default AOV descriptor for the given named AOV, specifying
-    /// things like preferred format.
-    ///
     HdAovDescriptor GetDefaultAovDescriptor(TfToken const& name) const override;
 
-    /// Returns a list of user-configurable render settings.
-    /// This is a reflection API for the render settings dictionary; it need
-    /// not be exhaustive, but can be used for populating application settings
-    /// UI.
     HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
+
+    VtDictionary GetRenderStats() const override;
+
+    bool IsPauseSupported() const override;
+    bool Pause() override;
+    bool Resume() override;
+
+#if PXR_VERSION >= 2005
+    bool IsStopSupported() const override;
+    bool Stop() override;
+    bool Restart() override;
+    void SetDrivers(HdDriverVector const& drivers) override;
+#endif // PXR_VERSION >= 2005
+
 private:
     static const TfTokenVector SUPPORTED_RPRIM_TYPES;
     static const TfTokenVector SUPPORTED_SPRIM_TYPES;
     static const TfTokenVector SUPPORTED_BPRIM_TYPES;
 
-    HdRprApiSharedPtr m_rprApiSharedPtr;
+    std::unique_ptr<HdRprApi> m_rprApi;
+    std::unique_ptr<HdRprRenderParam> m_renderParam;
     HdRenderSettingDescriptorList m_settingDescriptors;
+    HdRprRenderThread m_renderThread;
+
+    using DiagnostMgrDelegatePtr = std::unique_ptr<HdRprDiagnosticMgrDelegate, std::function<void (HdRprDiagnosticMgrDelegate*)>>;
+    DiagnostMgrDelegatePtr m_diagnosticMgrDelegate;
 };
+
 
 PXR_NAMESPACE_CLOSE_SCOPE
 
-extern "C"
-{
-    HDRPR_API
-    void SetHdRprRenderDevice(int renderDevice);
+extern "C" {
 
-    HDRPR_API
-    void SetHdRprRenderQuality(int quality);
+HDRPR_API void HdRprSetRenderDevice(const char* renderDevice);
 
-    HDRPR_API
-    const char* GetHdRprTmpDir();
-}
+HDRPR_API void HdRprSetRenderQuality(const char* quality);
+
+// Returned pointer should be released by the caller with HdRprFree
+HDRPR_API char* HdRprGetRenderQuality();
+
+HDRPR_API void HdRprFree(void* ptr);
+
+} // extern "C"
 
 #endif // HDRPR_RENDER_DELEGATE_H

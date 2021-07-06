@@ -50,7 +50,27 @@ if (PXR_BUILD_TESTS)
     enable_testing()
 endif()
 
+include(parseVersion)
+
 if(NOT DEFINED RPR_SDK_PLATFORM)
     include(PlatformIntrospection)
     DETERMINE_PLATFORM(RPR_SDK_PLATFORM)
+endif()
+
+if(WIN32)
+    set(PXR_RESOURCE_FILE_SRC_DST_SEPARATOR "|")
+else()
+    set(PXR_RESOURCE_FILE_SRC_DST_SEPARATOR ":")
+endif()
+
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    OUTPUT_VARIABLE RPR_GIT_SHORT_HASH
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+add_definitions(-DRPR_GIT_SHORT_HASH="${RPR_GIT_SHORT_HASH}")
+
+if(MSVC)
+    # Allow running INSTALL target
+    set(CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD 1)
 endif()

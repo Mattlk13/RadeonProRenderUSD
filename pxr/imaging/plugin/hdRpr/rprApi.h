@@ -1,3 +1,16 @@
+/************************************************************************
+Copyright 2020 Advanced Micro Devices, Inc
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+    http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+************************************************************************/
+
 #ifndef HDRPR_RPR_API_H
 #define HDRPR_RPR_API_H
 
@@ -6,113 +19,161 @@
 #include "pxr/base/gf/vec2i.h"
 #include "pxr/base/gf/vec3f.h"
 #include "pxr/base/vt/array.h"
-#include "pxr/base/gf/matrix4d.h"
+#include "pxr/base/gf/matrix4f.h"
 #include "pxr/base/gf/quaternion.h"
-#include "pxr/imaging/hd/types.h"
 #include "pxr/base/tf/staticTokens.h"
+#include "pxr/imaging/hd/types.h"
+#include "pxr/imaging/hd/camera.h"
+#include "pxr/imaging/hd/material.h"
+#include "pxr/imaging/hd/renderPassState.h"
+#include "pxr/imaging/hd/renderDelegate.h"
+
+#include <RadeonProRender.hpp>
 
 #include <memory>
+#include <vector>
+#include <string>
+#include <condition_variable>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-class HdRprApiImpl;
+class HdRprDelegate;
+class HdRprRenderThread;
 class MaterialAdapter;
-struct RprApiMaterial;
 
-class RprApiObject {
-public:
-    static std::unique_ptr<RprApiObject> Wrap(void* handle);
+class HdRprApiImpl;
+class RprUsdMaterial;
 
-    RprApiObject() : m_handle(nullptr) {}
-    RprApiObject(nullptr_t) : m_handle(nullptr) {}
+struct HdRprApiVolume;
+struct HdRprApiEnvironmentLight;
 
-    explicit RprApiObject(void* handle);
-    RprApiObject(void* handle, std::function<void (void*)> deleter);
-    ~RprApiObject();
+template <typename T, typename... Args>
+std::unique_ptr<T> make_unique(Args&&... args) {
+    return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+}
 
-    void AttachDependency(std::unique_ptr<RprApiObject>&& dependencyObject);
-
-    void AttachOnReleaseAction(TfToken const& actionName, std::function<void (void*)> action);
-    void DettachOnReleaseAction(TfToken const& actionName);
-
-    void* GetHandle() const;
-
-private:
-    void* m_handle;
-    std::function<void (void*)> m_deleter;
-    std::vector<std::unique_ptr<RprApiObject>> m_dependencyObjects;
-    std::map<TfToken, std::function<void (void*)>> m_onReleaseActions;
+enum HdRprVisibilityFlag {
+    kVisiblePrimary = 1 << 0,
+    kVisibleShadow = 1 << 1,
+    kVisibleReflection = 1 << 2,
+    kVisibleRefraction = 1 << 3,
+    kVisibleTransparent = 1 << 4,
+    kVisibleDiffuse = 1 << 5,
+    kVisibleGlossyReflection = 1 << 6,
+    kVisibleGlossyRefraction = 1 << 7,
+    kVisibleLight = 1 << 8,
+    kVisibleAll = (kVisibleLight << 1) - 1
 };
-using RprApiObjectPtr = std::unique_ptr<RprApiObject>;
+const uint32_t kInvisible = 0u;
 
-#define HD_RPR_AOV_TOKENS \
-    (color)                                     \
-    (albedo)                                    \
-    (depth)                                     \
-    (linearDepth)                               \
-    (primId)                                    \
-    (instanceId)                                \
-    (elementId)                                 \
-    (normal)                                    \
-    (worldCoordinate)                           \
-    ((primvarsSt, "primvars:st"))
-
-TF_DECLARE_PUBLIC_TOKENS(HdRprAovTokens, HDRPR_API, HD_RPR_AOV_TOKENS);
-
-class HdRprApi final
-{
+class HdRprApi final {
 public:
-    HdRprApi();
+    HdRprApi(HdRprDelegate* delegate);
     ~HdRprApi();
 
-    RprApiObjectPtr CreateEnvironmentLight(const std::string& pathTotexture, float intensity);
-    RprApiObjectPtr CreateEnvironmentLight(GfVec3f color, float intensity);
-    RprApiObjectPtr CreateRectLightMesh(float width, float height);
-    RprApiObjectPtr CreateSphereLightMesh(float radius);
-    RprApiObjectPtr CreateDiskLightMesh(float width, float height, const GfVec3f& color);
+    HdRprApiEnvironmentLight* CreateEnvironmentLight(const std::string& pathTotexture, float intensity, VtValue const& backgroundOverride);
+    HdRprApiEnvironmentLight* CreateEnvironmentLight(GfVec3f color, float intensity, VtValue const& backgroundOverride);
+    void SetTransform(HdRprApiEnvironmentLight* envLight, GfMatrix4f const& transform);
+    void Release(HdRprApiEnvironmentLight* envLight);
 
-    RprApiObjectPtr CreateVolume(const VtArray<float>& gridDencityData, const VtArray<size_t>& indexesDencity, const VtArray<float>& gridAlbedoData, const VtArray<unsigned int>& indexesAlbedo, const GfVec3i& grigSize, const GfVec3f& voxelSize);
+    rpr::DirectionalLight* CreateDirectionalLight();
+    rpr::SpotLight* CreateSpotLight(float angle, float softness);
+    rpr::IESLight* CreateIESLight(std::string const& iesFilepath);
+    rpr::PointLight* CreatePointLight();
+    rpr::DiskLight* CreateDiskLight();
+    rpr::SphereLight* CreateSphereLight();
 
-    RprApiObjectPtr CreateMesh(const VtVec3fArray& points, const VtIntArray& pointIndexes, const VtVec3fArray& normals, const VtIntArray& normalIndexes, const VtVec2fArray& uv, const VtIntArray& uvIndexes, const VtIntArray& vpf);
-    RprApiObjectPtr CreateMeshInstance(RprApiObject* prototypeMesh);
-    void SetMeshTransform(RprApiObject* mesh, const GfMatrix4d& transform);
-    void SetMeshRefineLevel(RprApiObject* mesh, int level, TfToken boundaryInterpolation);
-    void SetMeshMaterial(RprApiObject* mesh, RprApiObject const* material);
-    void SetMeshVisibility(RprApiObject* mesh, bool isVisible);
+    void SetDirectionalLightAttributes(rpr::DirectionalLight* light, GfVec3f const& color, float shadowSoftnessAngle);
+    void SetLightRadius(rpr::SphereLight* light, float radius);
+    void SetLightRadius(rpr::DiskLight* light, float radius);
+    void SetLightAngle(rpr::DiskLight* light, float angle);
+    void SetLightColor(rpr::RadiantLight* light, GfVec3f const& color);
 
-    RprApiObjectPtr CreateCurve(const VtVec3fArray& points, const VtIntArray& indexes, float width);
-    void SetCurveMaterial(RprApiObject* curve, RprApiObject const* material);
+    void Release(rpr::Light* light);
 
-    RprApiObjectPtr CreateMaterial(MaterialAdapter& materialAdapter);
+    RprUsdMaterial* CreateGeometryLightMaterial(GfVec3f const& emissionColor);
+    void ReleaseGeometryLightMaterial(RprUsdMaterial* material);
 
-    const GfMatrix4d& GetCameraViewMatrix() const;
+    struct VolumeMaterialParameters {
+        GfVec3f scatteringColor = GfVec3f(1.0f);
+        GfVec3f transmissionColor = GfVec3f(1.0f);
+        GfVec3f emissionColor = GfVec3f(1.0f);
+        float density = 1.0f;
+        float anisotropy = 0.0f;
+        bool multipleScattering = false;
+    };
+    HdRprApiVolume* CreateVolume(VtUIntArray const& densityCoords, VtFloatArray const& densityValues, VtVec3fArray const& densityLUT, float densityScale,
+                                 VtUIntArray const& albedoCoords, VtFloatArray const& albedoValues, VtVec3fArray const& albedoLUT, float albedoScale,
+                                 VtUIntArray const& emissionCoords, VtFloatArray const& emissionValues, VtVec3fArray const& emissionLUT, float emissionScale,
+                                 const GfVec3i& gridSize, const GfVec3f& voxelSize, const GfVec3f& gridBBLow, VolumeMaterialParameters const& materialParams);
+    void SetTransform(HdRprApiVolume* volume, GfMatrix4f const& transform);
+    void Release(HdRprApiVolume* volume);
+
+    RprUsdMaterial* CreateMaterial(SdfPath const& materialId, HdSceneDelegate* sceneDelegate, HdMaterialNetworkMap const& materialNetwork);
+    RprUsdMaterial* CreatePointsMaterial(VtVec3fArray const& colors);
+    RprUsdMaterial* CreateDiffuseMaterial(GfVec3f const& color);
+    void Release(RprUsdMaterial* material);
+
+    rpr::Shape* CreateMesh(VtVec3fArray const& points, VtIntArray const& pointIndexes, VtVec3fArray const& normals, VtIntArray const& normalIndexes, VtVec2fArray const& uvs, VtIntArray const& uvIndexes, VtIntArray const& vpf, TfToken const& polygonWinding);
+    rpr::Shape* CreateMesh(VtArray<VtVec3fArray> const& pointSamples, VtIntArray const& pointIndexes, VtArray<VtVec3fArray> const& normalSamples, VtIntArray const& normalIndexes, VtArray<VtVec2fArray> const& uvSamples, VtIntArray const& uvIndexes, VtIntArray const& vpf, TfToken const& polygonWinding);
+    rpr::Shape* CreateMeshInstance(rpr::Shape* prototypeMesh);
+    void SetMeshRefineLevel(rpr::Shape* mesh, int level);
+    void SetMeshVertexInterpolationRule(rpr::Shape* mesh, TfToken boundaryInterpolation);
+    void SetMeshMaterial(rpr::Shape* mesh, RprUsdMaterial const* material, bool displacementEnabled);
+    void SetMeshVisibility(rpr::Shape* mesh, uint32_t visibilityMask);
+    void SetMeshId(rpr::Shape* mesh, uint32_t id);
+    void SetMeshIgnoreContour(rpr::Shape* mesh, bool ignoreContour);
+    void Release(rpr::Shape* shape);
+
+    rpr::Curve* CreateCurve(VtVec3fArray const& points, VtIntArray const& indices, VtFloatArray const& radiuses, VtVec2fArray const& uvs, VtIntArray const& segmentPerCurve);
+    void SetCurveMaterial(rpr::Curve* curve, RprUsdMaterial const* material);
+    void SetCurveVisibility(rpr::Curve* curve, uint32_t visibilityMask);
+    void Release(rpr::Curve* curve);
+
+    void SetTransform(rpr::SceneObject* object, GfMatrix4f const& transform);
+    void SetTransform(rpr::Shape* shape, size_t numSamples, float* timeSamples, GfMatrix4d* transformSamples);
+
+    void SetName(rpr::ContextObject* object, const char* name);
+    void SetName(RprUsdMaterial* object, const char* name);
+    void SetName(HdRprApiEnvironmentLight* object, const char* name);
+
+    GfMatrix4d GetCameraViewMatrix() const;
     const GfMatrix4d& GetCameraProjectionMatrix() const;
-    void SetCameraViewMatrix(const GfMatrix4d& m );
-    void SetCameraProjectionMatrix(const GfMatrix4d& m);
 
-    bool EnableAov(TfToken const& aovName, int width, int height, HdFormat format = HdFormatCount);
-    void DisableAov(TfToken const& aovName);
-    bool IsAovEnabled(TfToken const& aovName);
-    GfVec2i GetAovSize(TfToken const& aovName) const;
-    std::shared_ptr<char> GetAovData(TfToken const& aovName, std::shared_ptr<char> buffer = nullptr, size_t* bufferSize = nullptr);
+    HdCamera const* GetCamera() const;
+    void SetCamera(HdCamera const* camera);
 
-    // This function exist for only one particular reason:
-    //   for explicit bliting to GL framebuffer when there are no aovBindings in renderPass::_Execute
-    //   we need to know the latest enabled AOV so we can draw it
-    TfToken const& GetActiveAov() const;
+    GfVec2i GetViewportSize() const;
+    void SetViewportSize(GfVec2i const& size);
 
-    void Render();
+    void SetAovBindings(HdRenderPassAovBindingVector const& aovBindings);
+    HdRenderPassAovBindingVector GetAovBindings() const;
 
+    void SetInteropInfo(void* interopInfo, std::condition_variable* presentedConditionVariable, bool* presentedCondition);
+
+    struct RenderStats {
+        double percentDone;
+        double averageRenderTimePerSample;
+        double averageResolveTimePerSample;
+    };
+    RenderStats GetRenderStats() const;
+
+    void CommitResources();
+    void Resolve(SdfPath const& aovId);
+    void Render(HdRprRenderThread* renderThread);
+    void AbortRender();
+
+    bool IsChanged() const;
     bool IsGlInteropEnabled() const;
-
-    static const char* GetTmpDir();
+    bool IsVulkanInteropEnabled() const;
+    bool IsArbitraryShapedLightSupported() const;
+    bool IsSphereAndDiskLightSupported() const;
+    TfToken const& GetCurrentRenderQuality() const;
+    rpr::FrameBuffer* GetRawColorFramebuffer();
 
 private:
     HdRprApiImpl* m_impl = nullptr;
 };
-
-typedef std::shared_ptr<HdRprApi> HdRprApiSharedPtr;
-typedef std::weak_ptr<HdRprApi> HdRprApiWeakPtr;
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

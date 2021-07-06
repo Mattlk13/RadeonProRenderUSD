@@ -1,161 +1,172 @@
+/************************************************************************
+Copyright 2020 Advanced Micro Devices, Inc
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+    http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+************************************************************************/
+
 #include "renderBuffer.h"
+#include "renderParam.h"
+#include "rprApi.h"
 
 #include "pxr/imaging/hd/sceneDelegate.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-TF_DEFINE_PRIVATE_TOKENS(
-    _tokens,
-    (aov_color) \
-    (aov_normal) \
-    (aov_depth) \
-    (aov_linear_depth) \
-    (aov_primId) \
-    (aov_primvars_st)
-);
+HdRprRenderBuffer::HdRprRenderBuffer(SdfPath const& id, HdRprApi* api)
+    : HdRenderBuffer(id)
+    , m_numMappers(0)
+    , m_isConverged(false)
+    , m_rprApi(api) {
 
-HdRprRenderBuffer::HdRprRenderBuffer(SdfPath const & id, HdRprApiSharedPtr rprApi) : HdRenderBuffer(id), m_numMappers(0)
-{
-    if (!rprApi)
-    {
-        TF_CODING_ERROR("RprApi is expired");
-        return;
-    }
-
-    m_rprApiWeakPrt = rprApi;
-
-    auto& idName = id.GetName();
-    if (idName == _tokens->aov_color)
-    {
-        m_aovName = HdRprAovTokens->color;
-        m_format = HdFormat::HdFormatUNorm8Vec4;
-    }
-    else if (idName == _tokens->aov_normal)
-    {
-        m_aovName = HdRprAovTokens->normal;
-        m_format = HdFormat::HdFormatFloat32Vec3;
-    }
-    else if (idName == _tokens->aov_depth)
-    {
-        m_aovName = HdRprAovTokens->depth;
-        m_format = HdFormat::HdFormatFloat32;
-    }
-    else if (idName == _tokens->aov_linear_depth)
-    {
-        m_aovName = HdRprAovTokens->linearDepth;
-        m_format = HdFormat::HdFormatFloat32;
-    }
-    else if (idName == _tokens->aov_primId)
-    {
-        m_aovName = HdRprAovTokens->primId;
-        m_format = HdFormat::HdFormatUNorm8Vec4;
-    }
-    else if (idName == _tokens->aov_primvars_st)
-    {
-        m_aovName = HdRprAovTokens->primvarsSt;
-        m_format = HdFormat::HdFormatFloat32Vec3;
-    }
 }
 
-HdDirtyBits HdRprRenderBuffer::GetInitialDirtyBitsMask() const
-{
-	return AllDirty;
+void HdRprRenderBuffer::Sync(HdSceneDelegate* sceneDelegate,
+                             HdRenderParam* renderParam,
+                             HdDirtyBits* dirtyBits) {
+    if (*dirtyBits & DirtyDescription) {
+        // hdRpr has the background thread write directly into render buffers,
+        // so we need to stop the render thread before reallocating them.
+        static_cast<HdRprRenderParam*>(renderParam)->AcquireRprApiForEdit();
+    }
+
+    HdRenderBuffer::Sync(sceneDelegate, renderParam, dirtyBits);
+}
+
+void HdRprRenderBuffer::Finalize(HdRenderParam* renderParam) {
+    // hdRpr has the background thread write directly into render buffers,
+    // so we need to stop the render thread before reallocating them.
+    static_cast<HdRprRenderParam*>(renderParam)->AcquireRprApiForEdit();
+
+    HdRenderBuffer::Finalize(renderParam);
 }
 
 bool HdRprRenderBuffer::Allocate(GfVec3i const& dimensions,
-                      HdFormat format,
-                      bool multiSampled) {
-    if (m_aovName.IsEmpty()) {
+                                 HdFormat format,
+                                 bool multiSampled) {
+    if (dimensions[2] != 1) {
+        TF_WARN("HdRprRenderBuffer supports 2D buffers only");
         return false;
     }
 
-    if (auto rprApi = m_rprApiWeakPrt.lock()) {
-        if (rprApi->EnableAov(m_aovName, dimensions[0], dimensions[1], m_format)) {
-            m_width = dimensions[0];
-            m_height = dimensions[1];
-            return true;
-        }
+#ifdef ENABLE_MULTITHREADED_RENDER_BUFFER
+    std::unique_lock<std::mutex> lock(m_mapMutex);
+    m_mapConditionVar.wait(lock, [this]() { return m_numMappers == 0; });
+#endif // ENABLE_MULTITHREADED_RENDER_BUFFER
+
+    m_width = dimensions[0];
+    m_height = dimensions[1];
+    m_format = format;
+    m_multiSampled = multiSampled;
+    m_isConverged.store(false);
+
+    size_t dataByteSize = m_width * m_height * HdDataSizeOfFormat(m_format);
+    if (dataByteSize) {
+        m_mappedBuffer.reserve(dataByteSize);
+        std::memset(m_mappedBuffer.data(), 0, dataByteSize);
     } else {
-        TF_CODING_ERROR("RprApi is expired");
+        m_mappedBuffer = std::vector<uint8_t>();
     }
 
-    return false;
+    return true;
 }
 
 void HdRprRenderBuffer::_Deallocate() {
-    if (auto rprApi = m_rprApiWeakPrt.lock()) {
-        if (!m_aovName.IsEmpty()) {
-            rprApi->DisableAov(m_aovName);
-        }
-    }
 
-    m_format = HdFormatInvalid;
+#ifdef ENABLE_MULTITHREADED_RENDER_BUFFER
+    std::unique_lock<std::mutex> lock(m_mapMutex);
+    m_mapConditionVar.wait(lock, [this]() { return m_numMappers == 0; });
+#endif // ENABLE_MULTITHREADED_RENDER_BUFFER
+
     m_width = 0u;
     m_height = 0u;
-}
-
-unsigned int HdRprRenderBuffer::GetWidth() const {
-    return m_width;
-}
-
-unsigned int HdRprRenderBuffer::GetHeight() const {
-    return m_height;
-}
-
-unsigned int HdRprRenderBuffer::GetDepth() const {
-    return 1u;
-}
-
-HdFormat HdRprRenderBuffer::GetFormat() const {
-    if (m_aovName == HdRprAovTokens->primId) {
-        return HdFormatInt32;
-    }
-    return m_format;
-}
-
-bool HdRprRenderBuffer::IsMultiSampled() const {
-    return false;
+    m_format = HdFormatInvalid;
+    m_isConverged.store(false);
+    m_mappedBuffer = std::vector<uint8_t>();
 }
 
 void* HdRprRenderBuffer::Map() {
+    m_rprApi->Resolve(GetId());
+
+#ifdef ENABLE_MULTITHREADED_RENDER_BUFFER
+    std::unique_lock<std::mutex> lock(m_mapMutex);
+#endif // ENABLE_MULTITHREADED_RENDER_BUFFER
+
     ++m_numMappers;
-    // XXX: RPR does not support framebuffer mapping, so here is at least correct mapping for reading
-    return m_dataCache.get();
+    return m_mappedBuffer.data();
 }
 
 void HdRprRenderBuffer::Unmap() {
-    if (m_numMappers > 0) {
+
+#ifdef ENABLE_MULTITHREADED_RENDER_BUFFER
+    bool isLastMapper;
+    {
+        std::unique_lock<std::mutex> lock(m_mapMutex);
+        if (!TF_VERIFY(m_numMappers)) {
+            TF_CODING_ERROR("Invalid HdRenderBuffer usage detected. Over-use of Unmap.");
+            return;
+        }
+#endif // ENABLE_MULTITHREADED_RENDER_BUFFER
+
         --m_numMappers;
+        TF_VERIFY(m_numMappers >= 0);
+
+#ifdef ENABLE_MULTITHREADED_RENDER_BUFFER
+        isLastMapper = m_numMappers == 0;
     }
+
+    if (isLastMapper) {
+        m_mapConditionVar.notify_one();
+    }
+#endif // ENABLE_MULTITHREADED_RENDER_BUFFER
+
+    // XXX We could consider clearing _mappedBuffer here to free RAM.
+    //     For now we assume that Map() will be called frequently so we prefer
+    //     to avoid the cost of clearing the buffer over memory savings.
+    //if (m_numMappers == 0) {
+    //    m_mappedBuffer = std::vector<uint8_t>();
+    //}
 }
 
 bool HdRprRenderBuffer::IsMapped() const {
-    return m_numMappers.load() != 0;
+    // There is no point to lock this read because HdRenderBuffer user has no idea about internal synchronization.
+    // Calling this function to check if they need to unmap a render buffer is just wrong and should not happen.
+    return m_numMappers != 0;
 }
 
 void HdRprRenderBuffer::Resolve() {
-    if (auto rprApi = m_rprApiWeakPrt.lock()) {
-        m_dataCache = rprApi->GetAovData(m_aovName, m_dataCache, &m_dataCacheSize);
-        if (m_aovName == HdRprAovTokens->primId) {
-            // RPR store integer ID values to RGB images using such formula:
-            // c[i].x = i;
-            // c[i].y = i/256;
-            // c[i].z = i/(256*256);
-            // i.e. saving little endian int24 to uchar3
-            // That's why we interpret the value as int and filling the alpha channel with zeros
-            auto primIdData = reinterpret_cast<int*>(m_dataCache.get());
-            for (uint32_t y = 0; y < m_height; ++y) {
-                uint32_t yOffset = y * m_width;
-                for (uint32_t x = 0; x < m_width; ++x) {
-                    primIdData[x + yOffset] &= 0xFFFFFF;
-                }
-            }
-        }
-    }
+    // no-op
 }
 
 bool HdRprRenderBuffer::IsConverged() const {
-    return false;
+    return m_isConverged.load();
+}
+
+void HdRprRenderBuffer::SetConverged(bool converged) {
+    return m_isConverged.store(converged);
+}
+
+VtValue HdRprRenderBuffer::GetResource(bool multiSampled) const {
+    if ("aov_color" == GetId().GetElementString()) {
+        rpr::FrameBuffer* color = m_rprApi->GetRawColorFramebuffer();
+        // RPR framebuffer not created yet
+        if (!color) {
+            return VtValue();
+        }
+
+        VtDictionary dictionary;
+        dictionary["isVulkanInteropEnabled"] = m_rprApi->IsVulkanInteropEnabled();
+        dictionary["framebuffer"] = color;
+
+        return VtValue(dictionary);
+    }
+    return VtValue();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE
